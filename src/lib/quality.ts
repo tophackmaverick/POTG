@@ -14,6 +14,7 @@ export interface AppSettings {
   overlay_enabled: boolean;
   clip_hotkey: string;
   overlay_hotkey: string;
+  clips_folder: string;
 }
 
 export const PRESETS: Record<
@@ -50,6 +51,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   overlay_enabled: true,
   clip_hotkey: "Ctrl+Shift+F9",
   overlay_hotkey: "Ctrl+Shift+F10",
+  clips_folder: "",
 };
 
 export function estimateMb(q: Pick<QualitySettings, "bitrate_mbps" | "replay_seconds">): number {

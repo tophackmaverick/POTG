@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { settings, loadSettings, saveSettings, resetSettings, watchSettings } from "./settings";
   import {
     DEFAULT_SETTINGS,
@@ -12,6 +13,7 @@
   } from "./quality";
   import { prettyHotkey } from "./hotkey";
   import HotkeyInput from "./HotkeyInput.svelte";
+  import { recorderStatus } from "./recorder";
 
   export let mode: "full" | "overlay" = "full";
 
@@ -24,6 +26,16 @@
   let unlisten: (() => void) | null = null;
 
   $: dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  $: diagnostics = [
+    `recording: ${$recorderStatus.recording}`,
+    `encoder: ${$recorderStatus.encoder || "-"}`,
+    `source: ${$recorderStatus.source || "-"}`,
+    `buffered seconds: ${$recorderStatus.buffered_seconds}`,
+    `last error: ${$recorderStatus.last_error || "-"}`,
+    `command: ${$recorderStatus.command || "-"}`,
+    "log:",
+    ...$recorderStatus.log,
+  ].join("\n");
   $: sync($settings);
 
   function sync(next: AppSettings | null) {
@@ -39,6 +51,20 @@
       draft.quality.preset = "custom";
     } else {
       draft.quality = { ...draft.quality, preset, ...PRESETS[preset] };
+    }
+  }
+
+  async function chooseClipsFolder() {
+    const dir = await open({ directory: true, multiple: false });
+    if (typeof dir === "string") draft.clips_folder = dir;
+  }
+
+  async function copyDiagnostics() {
+    try {
+      await navigator.clipboard.writeText(diagnostics);
+      message = "Diagnostics copied.";
+    } catch {
+      error = "Could not copy. Select the text and copy it by hand.";
     }
   }
 
@@ -141,6 +167,16 @@
 
     {#if mode === "full"}
       <section class="group">
+        <h3>Clips folder</h3>
+        <p class="path">{draft.clips_folder || "Default: your Videos folder, in a folder named POTG"}</p>
+        <div class="two">
+          <button type="button" class="btn" on:click={chooseClipsFolder}>Choose folder</button>
+          <button type="button" class="btn" on:click={() => (draft.clips_folder = "")}>Use default</button>
+        </div>
+        <p class="muted">Saved clips go here, and the library shows this folder.</p>
+      </section>
+
+      <section class="group">
         <h3>Overlay</h3>
         <label class="check">
           <input type="checkbox" bind:checked={draft.overlay_enabled} />
@@ -162,6 +198,22 @@
         <p class="muted">
           Use at least one modifier key. If another app already uses a shortcut, POTG tells you when you save.
         </p>
+      </section>
+      <section class="group">
+        <h3>Recording</h3>
+        <p class="muted">
+          {$recorderStatus.recording
+            ? `Recording with ${$recorderStatus.encoder} from ${$recorderStatus.source}.`
+            : "Not recording. Use Start recording at the top of the app."}
+        </p>
+        {#if $recorderStatus.last_error}
+          <p class="err">{$recorderStatus.last_error}</p>
+        {/if}
+        <details>
+          <summary>Diagnostics</summary>
+          <pre>{diagnostics}</pre>
+          <button type="button" class="btn" on:click={copyDiagnostics}>Copy diagnostics</button>
+        </details>
       </section>
     {:else}
       <p class="muted">
@@ -306,6 +358,38 @@
     margin: 0;
     font-size: 12px;
     color: var(--muted);
+  }
+
+  .path {
+    margin: 0;
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  details {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  summary {
+    cursor: pointer;
+  }
+
+  pre {
+    margin: 10px 0;
+    padding: 10px;
+    max-height: 220px;
+    overflow: auto;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: #050506;
+    color: var(--text);
   }
 
   .actions {

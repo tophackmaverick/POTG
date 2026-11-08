@@ -7,11 +7,19 @@
   import ClipCard from "./ClipCard.svelte";
   import EditorPanel from "./EditorPanel.svelte";
   import SettingsPanel from "./SettingsPanel.svelte";
-
-  const FOLDER_KEY = "potg.folder";
+  import { fileName } from "./format";
+  import { settings, loadSettings, saveSettings, watchSettings } from "./settings";
+  import {
+    recorderStatus,
+    refreshStatus,
+    startRecording,
+    stopRecording,
+    defaultClipsFolder,
+  } from "./recorder";
 
   let view: "library" | "settings" = "library";
   let folder = "";
+  let defaultFolder = "";
   let clips: ClipInfo[] = [];
   let selected: ClipInfo | null = null;
   let query = "";
@@ -19,14 +27,17 @@
   let error = "";
   let toast = "";
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  let recBusy = false;
 
+  $: folder = $settings ? $settings.clips_folder || defaultFolder : "";
+  $: if (folder) load();
   $: needle = query.trim().toLowerCase();
   $: visible = clips.filter((c) => c.name.toLowerCase().includes(needle));
 
-  function showToast(text: string) {
+  function showToast(text: string, ms = 3500) {
     toast = text;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (toast = ""), 3500);
+    toastTimer = setTimeout(() => (toast = ""), ms);
   }
 
   async function load() {
@@ -47,11 +58,25 @@
 
   async function chooseFolder() {
     const dir = await open({ directory: true, multiple: false });
-    if (typeof dir !== "string") return;
-    folder = dir;
-    localStorage.setItem(FOLDER_KEY, dir);
-    selected = null;
-    await load();
+    if (typeof dir !== "string" || !$settings) return;
+    try {
+      await saveSettings({ ...$settings, clips_folder: dir });
+      selected = null;
+    } catch (e) {
+      showToast(String(e), 6000);
+    }
+  }
+
+  async function toggleRecording() {
+    recBusy = true;
+    try {
+      if ($recorderStatus.recording) await stopRecording();
+      else await startRecording();
+    } catch (e) {
+      showToast(String(e), 8000);
+    } finally {
+      recBusy = false;
+    }
   }
 
   function select(clip: ClipInfo) {
@@ -63,14 +88,33 @@
   }
 
   onMount(() => {
-    folder = localStorage.getItem(FOLDER_KEY) ?? "";
-    load();
-    let stop: (() => void) | undefined;
-    listen("clip-requested", () =>
-      showToast("Clip hotkey pressed. Saving real clips arrives with native capture."),
-    ).then((unlisten) => (stop = unlisten));
+    let alive = true;
+    const stops: Array<() => void> = [];
+    const track = (pending: Promise<() => void>) =>
+      pending.then((stop) => (alive ? stops.push(stop) : stop()));
+
+    loadSettings().catch((e) => (error = String(e)));
+    defaultClipsFolder()
+      .then((f) => (defaultFolder = f))
+      .catch((e) => (error = String(e)));
+    refreshStatus().catch(() => {});
+
+    track(watchSettings());
+    track(
+      listen<string>("clip-saved", (e) => {
+        showToast(`Clip saved: ${fileName(e.payload)}`);
+        load();
+      }),
+    );
+    track(listen<string>("clip-failed", (e) => showToast(e.payload, 6000)));
+    track(listen("recorder-changed", () => refreshStatus().catch(() => {})));
+
+    const timer = setInterval(() => refreshStatus().catch(() => {}), 2000);
+
     return () => {
-      stop?.();
+      alive = false;
+      stops.forEach((stop) => stop());
+      clearInterval(timer);
       clearTimeout(toastTimer);
     };
   });
@@ -83,10 +127,22 @@
       <span class="tagline">Your best moments, already edited.</span>
     </div>
     <div class="tools">
+      {#if $recorderStatus.recording}
+        <span class="rec-pill"><span class="dot"></span> REC · {$recorderStatus.buffered_seconds}s buffered</span>
+      {/if}
+      <button class="btn" class:rec-on={$recorderStatus.recording} on:click={toggleRecording} disabled={recBusy}>
+        {#if recBusy}
+          Please wait...
+        {:else if $recorderStatus.recording}
+          Stop recording
+        {:else}
+          Start recording
+        {/if}
+      </button>
       {#if view === "library"}
         <input class="search" type="search" placeholder="Search clips" bind:value={query} />
         <button class="btn" on:click={load} disabled={!folder || loading}>Refresh</button>
-        <button class="btn" on:click={chooseFolder}>{folder ? "Change folder" : "Choose folder"}</button>
+        <button class="btn" on:click={chooseFolder}>Change folder</button>
       {/if}
       <button class="btn btn-red" on:click={toggleView}>
         {view === "settings" ? "Back to clips" : "Settings"}
@@ -98,11 +154,7 @@
     <main class="body">
       <section class="library gloss">
         {#if !folder}
-          <div class="empty">
-            <h2>Welcome to POTG</h2>
-            <p>Choose the folder where your gameplay clips are saved.</p>
-            <button class="btn btn-red btn-large" on:click={chooseFolder}>Choose clips folder</button>
-          </div>
+          <div class="empty"><span class="spinner"></span></div>
         {:else}
           <p class="path">{folder}</p>
           {#if error}
@@ -112,7 +164,11 @@
           {:else if visible.length === 0}
             <div class="empty">
               <h2>No videos found</h2>
-              <p>{clips.length === 0 ? "This folder has no mp4, mkv, mov, or webm files." : "No clips match your search."}</p>
+              <p>
+                {clips.length === 0
+                  ? "Start recording and press your clip hotkey, or add mp4, mkv, mov, or webm files to this folder."
+                  : "No clips match your search."}
+              </p>
             </div>
           {:else}
             <div class="grid">
@@ -154,6 +210,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     padding: 12px 18px;
     border-radius: var(--radius);
   }
@@ -162,6 +219,7 @@
     display: flex;
     align-items: baseline;
     gap: 14px;
+    min-width: 0;
   }
 
   .logo {
@@ -178,6 +236,7 @@
   .tagline {
     font-size: 12px;
     color: var(--muted);
+    white-space: nowrap;
   }
 
   .tools {
@@ -187,7 +246,42 @@
   }
 
   .search {
-    width: 220px;
+    width: 180px;
+  }
+
+  .rec-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 91, 105, 0.6);
+    background: rgba(225, 29, 46, 0.14);
+    white-space: nowrap;
+  }
+
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #ff3b4d;
+    box-shadow: 0 0 10px #ff3b4d;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  .rec-on {
+    border-color: var(--red-hi);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 0 14px var(--red-glow);
+  }
+
+  @keyframes pulse {
+    50% {
+      opacity: 0.35;
+    }
   }
 
   .body {
@@ -240,6 +334,7 @@
     gap: 12px;
     height: 100%;
     min-height: 260px;
+    padding: 0 24px;
     text-align: center;
     color: var(--muted);
   }
@@ -252,6 +347,7 @@
 
   .empty p {
     margin: 0;
+    max-width: 420px;
     font-size: 13px;
   }
 
@@ -265,6 +361,7 @@
     position: fixed;
     left: 50%;
     bottom: 28px;
+    max-width: 80vw;
     transform: translateX(-50%);
     padding: 12px 20px;
     font-size: 13px;
@@ -275,5 +372,6 @@
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.12),
       0 10px 30px var(--red-glow);
+    word-break: break-word;
   }
 </style>
