@@ -8,11 +8,11 @@ use std::time::UNIX_EPOCH;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-fn env_or(key: &str, default: &str) -> String {
+pub(crate) fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-fn command(program: &str) -> Command {
+pub(crate) fn command(program: &str) -> Command {
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000);

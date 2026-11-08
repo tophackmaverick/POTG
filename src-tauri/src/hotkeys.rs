@@ -1,5 +1,5 @@
 use crate::settings::Settings;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 fn parse(label: &str, key: &str) -> Result<Shortcut, String> {
@@ -21,7 +21,7 @@ pub fn apply(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     shortcuts
         .on_shortcut(clip, |app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
-                let _ = app.emit("clip-requested", ());
+                crate::capture::save_from_hotkey(app);
             }
         })
         .map_err(|e| {
