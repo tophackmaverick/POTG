@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "potg",
+  "productName": "POTG",
   "version": "0.1.0",
   "identifier": "gg.potg.desktop",
   "build": {
@@ -10,11 +10,22 @@
     "frontendDist": "../build"
   },
   "app": {
-    "windows": [{ "title": "POTG", "width": 1280, "height": 800, "minWidth": 1000, "minHeight": 640 }],
-     "security": {
-       "csp": null,
-       "assetProtocol": { "enable": true, "scope": ["**"] }
-     }
+    "windows": [
+      {
+        "title": "POTG",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1000,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
   },
   "bundle": {
     "active": true,
