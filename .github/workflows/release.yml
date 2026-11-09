@@ -29,8 +29,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Download FFmpeg
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-8.1.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-dl
+          $root = Get-ChildItem ffmpeg-dl -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          $target = "src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe"
+          Copy-Item "$($root.FullName)/bin/ffmpeg.exe" $target
+          & $target -version
+          $filters = & $target -hide_banner -filters
+          if (-not ($filters | Select-String "ddagrab")) { throw "This FFmpeg build has no ddagrab screen capture filter" }
+          & $target -hide_banner -encoders | Select-String "nvenc|amf|qsv|h264_mf"
+
       - name: Build installer
-        run: npm run tauri build -- --bundles nsis
+        run: npm run tauri build -- --bundles nsis --config src-tauri/tauri.release.conf.json
 
       - name: Prepare files
         shell: pwsh
@@ -39,6 +54,7 @@ jobs:
           Copy-Item $installer.FullName "POTG-setup.exe"
           $hash = (Get-FileHash "POTG-setup.exe" -Algorithm SHA256).Hash.ToLower()
           "$hash  POTG-setup.exe" | Out-File -Encoding ascii "POTG-setup.exe.sha256"
+          "Installer size: {0:N1} MB" -f ((Get-Item "POTG-setup.exe").Length / 1MB)
 
       - uses: actions/upload-artifact@v4
         with:
@@ -46,6 +62,7 @@ jobs:
           path: |
             POTG-setup.exe
             POTG-setup.exe.sha256
+            THIRD-PARTY-NOTICES.md
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
@@ -54,11 +71,12 @@ jobs:
           files: |
             POTG-setup.exe
             POTG-setup.exe.sha256
+            THIRD-PARTY-NOTICES.md
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
-            Download POTG-setup.exe and run it.
+            Download POTG-setup.exe and run it. FFmpeg is included, so there is nothing else to install for recording and trimming.
 
             Windows may show a SmartScreen warning because the installer is not code signed yet. Choose More info, then Run anyway.
 
-            The SHA-256 checksum is in POTG-setup.exe.sha256.
+            The SHA-256 checksum is in POTG-setup.exe.sha256. Third-party license information is in THIRD-PARTY-NOTICES.md.

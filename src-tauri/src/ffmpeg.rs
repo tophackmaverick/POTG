@@ -8,11 +8,28 @@ use std::time::UNIX_EPOCH;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-fn env_or(key: &str, default: &str) -> String {
+pub(crate) fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-fn command(program: &str) -> Command {
+pub(crate) fn tool(name: &str, env_key: &str) -> String {
+    if let Ok(path) = std::env::var(env_key) {
+        return path;
+    }
+    let beside_app = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.to_path_buf()));
+    if let Some(dir) = beside_app {
+        let file = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+        let bundled = dir.join(file);
+        if bundled.is_file() {
+            return bundled.to_string_lossy().into_owned();
+        }
+    }
+    name.to_string()
+}
+
+pub(crate) fn command(program: &str) -> Command {
     let mut cmd = Command::new(program);
     #[cfg(windows)]
     cmd.creation_flags(0x0800_0000);
@@ -105,19 +122,26 @@ pub async fn list_clips(folder: String) -> Result<Vec<ClipInfo>, String> {
     .await
 }
 
+fn parse_duration(text: &str) -> Option<f64> {
+    let rest = text.split("Duration:").nth(1)?.trim_start();
+    let stamp = rest.split(',').next()?.trim();
+    let mut parts = stamp.split(':');
+    let hours: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next()?.parse().ok()?;
+    let seconds: f64 = parts.next()?.parse().ok()?;
+    Some(hours * 3600.0 + minutes * 60.0 + seconds)
+}
+
 #[tauri::command]
 pub async fn get_duration(input: String) -> Result<f64, String> {
     blocking(move || {
         check_input(&input)?;
-        let mut cmd = command(&env_or("POTG_FFPROBE", "ffprobe"));
-        cmd.args([
-            "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", &input,
-        ]);
-        let out = run(cmd, "ffprobe")?;
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| "could not read the video duration".to_string())
+        let out = command(&tool("ffmpeg", "POTG_FFMPEG"))
+            .args(["-hide_banner", "-i", &input])
+            .output()
+            .map_err(|e| format!("could not start ffmpeg: {e}. Is it installed and on PATH?"))?;
+        parse_duration(&String::from_utf8_lossy(&out.stderr))
+            .ok_or_else(|| "could not read the video duration".to_string())
     })
     .await
 }
@@ -135,7 +159,7 @@ pub async fn make_thumbnail(input: String, at_seconds: f64) -> Result<String, St
         if out_path.exists() {
             return Ok(out_path.to_string_lossy().into_owned());
         }
-        let mut cmd = command(&env_or("POTG_FFMPEG", "ffmpeg"));
+        let mut cmd = command(&tool("ffmpeg", "POTG_FFMPEG"));
         cmd.args(["-y", "-v", "error", "-ss", &format!("{at_seconds:.3}"), "-i", &input])
             .args(["-frames:v", "1", "-vf", "scale=320:-1"])
             .arg(&out_path);
@@ -164,7 +188,7 @@ fn trim_blocking(
         return Err("output file must be different from the original".into());
     }
 
-    let mut cmd = command(&env_or("POTG_FFMPEG", "ffmpeg"));
+    let mut cmd = command(&tool("ffmpeg", "POTG_FFMPEG"));
     cmd.args(["-y", "-v", "error", "-ss", &format!("{start:.3}"), "-i", input])
         .args(["-t", &format!("{:.3}", end - start)]);
     if precise {
@@ -223,7 +247,8 @@ pub async fn auto_cut(input: String, pre: f64, post: f64) -> Result<AutoCutResul
         check_input(&input)?;
         let default_python = if cfg!(windows) { "python" } else { "python3" };
         let mut cmd = command(&env_or("POTG_PYTHON", default_python));
-        cmd.arg(analysis_script())
+        cmd.env("POTG_FFMPEG", tool("ffmpeg", "POTG_FFMPEG"))
+            .arg(analysis_script())
             .arg(&input)
             .args(["--pre", &pre.to_string(), "--post", &post.to_string()]);
 

@@ -2,14 +2,15 @@
 
 **Your best moments, already edited.**
 
-POTG is a gameplay clipping app in the spirit of Medal, with one difference: Medal saves the clip, POTG finishes it. Open a clip, press **Auto Cut**, and POTG analyzes the video and trims it around the moment that matters.
+POTG is a gameplay clipping app that doesn't stop at saving the clip: it finishes it. Open a clip, press **Auto Cut**, and POTG analyzes the video and trims it around the moment that matters.
 
-> **Status: early development.** POTG currently works on video files you already have. Built-in game recording is the next big milestone and is not available yet.
+> **Status: early development.** Built-in recording is new and still being tested on Windows. Clip editing and Auto Cut work on any video file.
 
 Website: POTG.gg (coming soon)
 
 ## What works today
 
+- **Recording (in testing).** Start recording, and POTG keeps a rolling replay buffer of your screen. Press the clip hotkey to save the last seconds as an MP4. It picks a hardware encoder automatically. No audio yet.
 - **Clip library.** Pick a folder and browse your clips as a grid with thumbnails, duration, size, and date, plus search.
 - **Player and manual trim.** Preview a clip, set start and end points with sliders, and save a trimmed copy. The original is never overwritten.
 - **Auto Cut.** POTG scores the audio loudness and on-screen motion across the clip, finds the peak, and saves a trimmed copy around it with adjustable time before and after.
@@ -19,10 +20,10 @@ Website: POTG.gg (coming soon)
 
 ## Coming next
 
-- Built-in recording with no OBS or other apps required: Windows Graphics Capture, hardware encoding, and a rolling replay buffer saved with the clip hotkey
+- Game and desktop audio in recordings
 - Game and microphone audio capture
 - Captions and 9:16 vertical export for TikTok and Shorts
-- A self-contained Windows installer with FFmpeg and the analysis engine bundled in
+- A self-contained analysis engine, so Auto Cut needs no Python
 
 ## How Auto Cut works
 
@@ -49,7 +50,7 @@ Website: POTG.gg (coming soon)
 - Node.js (LTS)
 - Rust, installed from rustup.rs
 - Python 3.11 or newer
-- FFmpeg and FFprobe on your PATH
+- FFmpeg on your PATH (the Windows installer already includes it)
 - Windows: Visual Studio C++ Build Tools. macOS: Xcode Command Line Tools (`xcode-select --install`)
 
 ### Run it
@@ -74,7 +75,7 @@ It prints one line of JSON with the peak time and the suggested start and end.
 
 ### Environment overrides
 
-For development you can point POTG at specific tools with `POTG_FFMPEG`, `POTG_FFPROBE`, `POTG_PYTHON`, and `POTG_ANALYSIS`.
+For development you can point POTG at specific tools with `POTG_FFMPEG`, `POTG_PYTHON`, and `POTG_ANALYSIS`.
 
 ## Default hotkeys
 
@@ -106,14 +107,18 @@ src-tauri/       Rust backend (trim, Auto Cut, settings, hotkeys, overlay)
 
 ## Known limitations
 
-- Recording is not implemented yet.
+- Recording captures the whole main screen, not a single game window, and has no audio yet.
 - The overlay is a normal window, so it will not appear over games in exclusive fullscreen. Borderless windowed mode is the target.
 - The first installers are unsigned, so Windows SmartScreen shows a warning. Choose More info, then Run anyway.
-- Early installers do not bundle FFmpeg or Python yet, so Auto Cut and thumbnails need them installed.
+- The Windows installer includes FFmpeg, but Auto Cut still needs Python 3.11 or newer with NumPy and OpenCV installed.
 
 ## Contributing
 
 Commit messages follow Conventional Commits, for example `feat(library): add manual trim` or `fix(capture): handle black frames`.
+
+## Third-party software
+
+The Windows installer includes an LGPL build of FFmpeg. See THIRD-PARTY-NOTICES.md for details.
 
 ## License
 
