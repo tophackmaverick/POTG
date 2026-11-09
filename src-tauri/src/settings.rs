@@ -32,6 +32,10 @@ pub struct Settings {
     pub overlay_enabled: bool,
     pub clip_hotkey: String,
     pub overlay_hotkey: String,
+    pub clips_folder: String,
+    pub capture_system_audio: bool,
+    pub capture_mic: bool,
+    pub audio_offset_ms: i32,
 }
 
 impl Default for Settings {
@@ -41,6 +45,10 @@ impl Default for Settings {
             overlay_enabled: true,
             clip_hotkey: "Ctrl+Shift+F9".into(),
             overlay_hotkey: "Ctrl+Shift+F10".into(),
+            clips_folder: String::new(),
+            capture_system_audio: true,
+            capture_mic: false,
+            audio_offset_ms: 0,
         }
     }
 }
@@ -52,7 +60,7 @@ impl SettingsState {
         Self(Mutex::new(settings))
     }
 
-    fn get(&self) -> Settings {
+    pub fn get(&self) -> Settings {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
@@ -88,6 +96,12 @@ pub fn validate(s: &Settings) -> Result<(), String> {
         if key.split('+').count() < 2 {
             return Err(format!("the {name} hotkey needs at least one modifier key"));
         }
+    }
+    if !s.clips_folder.is_empty() && !std::path::Path::new(&s.clips_folder).is_absolute() {
+        return Err("the clips folder must be a full path".into());
+    }
+    if !(-2000..=2000).contains(&s.audio_offset_ms) {
+        return Err("the audio delay must be between -2000 and 2000 ms".into());
     }
     if s.clip_hotkey.eq_ignore_ascii_case(&s.overlay_hotkey) {
         return Err("the clip hotkey and the overlay hotkey must be different".into());

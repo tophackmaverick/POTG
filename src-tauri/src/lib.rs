@@ -1,3 +1,6 @@
+mod analysis;
+mod audio;
+mod capture;
 mod ffmpeg;
 mod hotkeys;
 mod overlay;
@@ -7,12 +10,13 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let loaded = settings::load(app.handle());
             app.manage(settings::SettingsState::new(loaded.clone()));
+            app.manage(capture::Recorder::new());
             if let Err(e) = hotkeys::apply(app.handle(), &loaded) {
                 eprintln!("hotkeys: {e}");
             }
@@ -28,7 +32,18 @@ pub fn run() {
             settings::save_settings,
             settings::reset_settings,
             overlay::close_overlay,
+            capture::start_recording,
+            capture::stop_recording,
+            capture::save_clip_now,
+            capture::recorder_status,
+            capture::default_clips_folder,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running POTG");
+        .build(tauri::generate_context!())
+        .expect("error while building POTG");
+
+    app.run(|handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            capture::stop(handle.state::<capture::Recorder>().inner());
+        }
+    });
 }

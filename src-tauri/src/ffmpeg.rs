@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -7,10 +7,6 @@ use std::time::UNIX_EPOCH;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-
-pub(crate) fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.to_string())
-}
 
 pub(crate) fn tool(name: &str, env_key: &str) -> String {
     if let Ok(path) = std::env::var(env_key) {
@@ -132,16 +128,20 @@ fn parse_duration(text: &str) -> Option<f64> {
     Some(hours * 3600.0 + minutes * 60.0 + seconds)
 }
 
+pub(crate) fn duration_of(input: &str) -> Result<f64, String> {
+    let out = command(&tool("ffmpeg", "POTG_FFMPEG"))
+        .args(["-hide_banner", "-i", input])
+        .output()
+        .map_err(|e| format!("could not start ffmpeg: {e}. Is it installed and on PATH?"))?;
+    parse_duration(&String::from_utf8_lossy(&out.stderr))
+        .ok_or_else(|| "could not read the video duration".to_string())
+}
+
 #[tauri::command]
 pub async fn get_duration(input: String) -> Result<f64, String> {
     blocking(move || {
         check_input(&input)?;
-        let out = command(&tool("ffmpeg", "POTG_FFMPEG"))
-            .args(["-hide_banner", "-i", &input])
-            .output()
-            .map_err(|e| format!("could not start ffmpeg: {e}. Is it installed and on PATH?"))?;
-        parse_duration(&String::from_utf8_lossy(&out.stderr))
-            .ok_or_else(|| "could not read the video duration".to_string())
+        duration_of(&input)
     })
     .await
 }
@@ -212,16 +212,6 @@ pub async fn trim_clip(
     blocking(move || trim_blocking(&input, start, end, output, precise)).await
 }
 
-#[derive(Deserialize)]
-struct AnalysisJson {
-    ok: bool,
-    error: Option<String>,
-    peak: Option<f64>,
-    start: Option<f64>,
-    end: Option<f64>,
-    confidence: Option<f64>,
-}
-
 #[derive(Serialize)]
 pub struct AutoCutResult {
     pub output: String,
@@ -231,56 +221,27 @@ pub struct AutoCutResult {
     pub confidence: f64,
 }
 
-fn analysis_script() -> PathBuf {
-    if let Ok(p) = std::env::var("POTG_ANALYSIS") {
-        return PathBuf::from(p);
-    }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("analysis")
-        .join("analyze.py")
-}
-
 #[tauri::command]
 pub async fn auto_cut(input: String, pre: f64, post: f64) -> Result<AutoCutResult, String> {
     blocking(move || {
         check_input(&input)?;
-        let default_python = if cfg!(windows) { "python" } else { "python3" };
-        let mut cmd = command(&env_or("POTG_PYTHON", default_python));
-        cmd.env("POTG_FFMPEG", tool("ffmpeg", "POTG_FFMPEG"))
-            .arg(analysis_script())
-            .arg(&input)
-            .args(["--pre", &pre.to_string(), "--post", &post.to_string()]);
-
-        let out = cmd
-            .output()
-            .map_err(|e| format!("could not start Python: {e}. Is it installed?"))?;
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let parsed: AnalysisJson = serde_json::from_str(stdout.trim()).map_err(|_| {
-            format!(
-                "analysis gave unreadable output: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            )
-        })?;
-        if !parsed.ok {
-            return Err(parsed.error.unwrap_or_else(|| "analysis failed".into()));
-        }
-        let (Some(peak), Some(start), Some(end), Some(confidence)) =
-            (parsed.peak, parsed.start, parsed.end, parsed.confidence)
-        else {
-            return Err("analysis result was incomplete".into());
-        };
-
+        let found = crate::analysis::analyze(&input, pre, post, 5.0, 30.0)?;
         let in_path = PathBuf::from(&input);
         let out_path = unique_path(&in_path, "autocut");
         let output = trim_blocking(
             &input,
-            start,
-            end,
+            found.start,
+            found.end,
             Some(out_path.to_string_lossy().into_owned()),
             true,
         )?;
-        Ok(AutoCutResult { output, peak, start, end, confidence })
+        Ok(AutoCutResult {
+            output,
+            peak: found.peak,
+            start: found.start,
+            end: found.end,
+            confidence: found.confidence,
+        })
     })
     .await
 }

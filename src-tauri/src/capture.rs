@@ -1,3 +1,4 @@
+use crate::audio::{self, AudioInput, AudioSession};
 use crate::ffmpeg::{command, tool};
 use crate::settings::{QualitySettings, Settings, SettingsState};
 use serde::Serialize;
@@ -38,6 +39,8 @@ struct Session {
     source: String,
     command_line: String,
     replay_seconds: u32,
+    audio: Option<AudioSession>,
+    audio_label: String,
 }
 
 pub struct Recorder {
@@ -59,6 +62,7 @@ pub struct RecorderStatus {
     pub recording: bool,
     pub encoder: String,
     pub source: String,
+    pub audio: String,
     pub buffered_seconds: u32,
     pub last_error: String,
     pub command: String,
@@ -136,7 +140,14 @@ fn add(args: &mut Vec<String>, items: &[&str]) {
     args.extend(items.iter().map(|s| s.to_string()));
 }
 
-fn build_args(source: Source, encoder: &str, q: &QualitySettings, dir: &Path) -> Vec<String> {
+fn build_args(
+    source: Source,
+    encoder: &str,
+    q: &QualitySettings,
+    dir: &Path,
+    audio_inputs: &[AudioInput],
+    offset_ms: i32,
+) -> Vec<String> {
     let fps = q.fps.to_string();
     let mut args: Vec<String> = Vec::new();
     add(&mut args, &["-hide_banner", "-loglevel", "warning", "-nostats"]);
@@ -157,12 +168,30 @@ fn build_args(source: Source, encoder: &str, q: &QualitySettings, dir: &Path) ->
             args.push(format!("testsrc2=size=1280x720:rate={fps}"));
         }
     }
+    for input in audio_inputs {
+        add(&mut args, &["-thread_queue_size", "1024", "-f", "f32le", "-ar", "48000", "-ac", "2"]);
+        if offset_ms != 0 {
+            args.push("-itsoffset".into());
+            args.push(format!("{:.3}", offset_ms as f64 / 1000.0));
+        }
+        add(&mut args, &["-analyzeduration", "0", "-probesize", "32", "-i"]);
+        args.push(format!("tcp://127.0.0.1:{}", input.port));
+    }
+
     if let Some(h) = target_height(&q.resolution) {
         filters.push(format!("scale=-2:{h}"));
     }
     filters.push("format=yuv420p".into());
     args.push("-vf".into());
     args.push(filters.join(","));
+    if !audio_inputs.is_empty() {
+        add(&mut args, &["-map", "0:v"]);
+        for index in 1..=audio_inputs.len() {
+            args.push("-map".into());
+            args.push(format!("{index}:a"));
+        }
+        add(&mut args, &["-c:a", "aac", "-b:a", "160k"]);
+    }
 
     add(&mut args, &["-c:v", encoder]);
     match encoder {
@@ -250,21 +279,61 @@ pub fn start(recorder: &Recorder, settings: &Settings) -> Result<(), String> {
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).map_err(|e| format!("cannot create the buffer folder: {e}"))?;
 
-    let args = build_args(source, &encoder, &settings.quality, &dir);
+    let log: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let wants_system = settings.capture_system_audio;
+    let wants_mic = settings.capture_mic;
+    let audio_session = if wants_system || wants_mic {
+        match audio::start(wants_system, wants_mic, &log) {
+            Ok(session) => Some(session),
+            Err(e) => {
+                set_error(recorder, e.clone());
+                return Err(e);
+            }
+        }
+    } else {
+        None
+    };
+    let audio_label = match (wants_system, wants_mic) {
+        (true, true) => "system audio and microphone",
+        (true, false) => "system audio",
+        (false, true) => "microphone",
+        (false, false) => "none",
+    }
+    .to_string();
+
+    let no_inputs: Vec<AudioInput> = Vec::new();
+    let inputs: &[AudioInput] = audio_session
+        .as_ref()
+        .map(|a| a.inputs.as_slice())
+        .unwrap_or(&no_inputs);
+    let args = build_args(
+        source,
+        &encoder,
+        &settings.quality,
+        &dir,
+        inputs,
+        settings.audio_offset_ms,
+    );
     let command_line = format!("{} {}", ffmpeg_bin(), args.join(" "));
-    let mut child = command(&ffmpeg_bin())
+
+    let spawned = command(&ffmpeg_bin())
         .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            if let Some(a) = audio_session {
+                a.stop();
+            }
             let message = format!("could not start FFmpeg: {e}. Is it installed and on PATH?");
             set_error(recorder, message.clone());
-            message
-        })?;
+            return Err(message);
+        }
+    };
 
-    let log: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
     if let Some(stderr) = child.stderr.take() {
         let log = log.clone();
         std::thread::spawn(move || {
@@ -291,9 +360,12 @@ pub fn start(recorder: &Recorder, settings: &Settings) -> Result<(), String> {
         });
     }
 
-    std::thread::sleep(Duration::from_millis(1200));
+    std::thread::sleep(Duration::from_millis(1500));
     if let Ok(Some(exit)) = child.try_wait() {
         stop.store(true, Ordering::Relaxed);
+        if let Some(a) = audio_session {
+            a.stop();
+        }
         let message = format!("FFmpeg stopped right away ({exit}). {}", log_tail(&log));
         set_error(recorder, message.clone());
         let _ = fs::remove_dir_all(&dir);
@@ -311,6 +383,8 @@ pub fn start(recorder: &Recorder, settings: &Settings) -> Result<(), String> {
         source: source.label().to_string(),
         command_line,
         replay_seconds: settings.quality.replay_seconds,
+        audio: audio_session,
+        audio_label,
     });
     Ok(())
 }
@@ -335,6 +409,9 @@ pub fn stop(recorder: &Recorder) {
             }
         }
     }
+    if let Some(audio) = session.audio.take() {
+        audio.stop();
+    }
     let _ = fs::remove_dir_all(&session.dir);
 }
 
@@ -350,12 +427,12 @@ fn unique_output(folder: &Path) -> PathBuf {
 }
 
 pub fn save(app: &AppHandle, recorder: &Recorder, settings: &Settings) -> Result<PathBuf, String> {
-    let (dir, replay) = {
+    let (dir, replay, has_audio) = {
         let guard = recorder.session.lock().unwrap_or_else(|e| e.into_inner());
         let session = guard
             .as_ref()
             .ok_or_else(|| "POTG is not recording. Press Start recording first.".to_string())?;
-        (session.dir.clone(), session.replay_seconds)
+        (session.dir.clone(), session.replay_seconds, session.audio.is_some())
     };
 
     let found = segments(&dir);
@@ -363,7 +440,17 @@ pub fn save(app: &AppHandle, recorder: &Recorder, settings: &Settings) -> Result
         return Err("Not enough footage yet. Try again in a moment.".into());
     }
     let take = (replay as usize + 1).min(found.len());
-    let chosen = &found[found.len() - take..];
+    let mut chosen: Vec<PathBuf> = found[found.len() - take..].to_vec();
+    if chosen.len() > 1 {
+        let tiny = chosen
+            .last()
+            .and_then(|p| fs::metadata(p).ok())
+            .map(|m| m.len() < 8192)
+            .unwrap_or(true);
+        if tiny {
+            chosen.pop();
+        }
+    }
 
     let folder = resolve_folder(app, settings)?;
     let output = unique_output(&folder);
@@ -375,10 +462,16 @@ pub fn save(app: &AppHandle, recorder: &Recorder, settings: &Settings) -> Result
         .collect();
     fs::write(&list_path, list).map_err(|e| format!("cannot prepare the clip: {e}"))?;
 
-    let result = command(&ffmpeg_bin())
+    let mut save_cmd = command(&ffmpeg_bin());
+    save_cmd
         .args(["-y", "-v", "error", "-f", "concat", "-safe", "0", "-i"])
         .arg(&list_path)
-        .args(["-c", "copy", "-movflags", "+faststart"])
+        .args(["-map", "0", "-c", "copy"]);
+    if has_audio {
+        save_cmd.args(["-bsf:a", "aac_adtstoasc"]);
+    }
+    let result = save_cmd
+        .args(["-movflags", "+faststart"])
         .arg(&output)
         .output()
         .map_err(|e| format!("could not start FFmpeg: {e}"))?;
@@ -414,6 +507,9 @@ pub fn status(recorder: &Recorder) -> RecorderStatus {
     if let Some(session) = guard.as_mut() {
         if let Ok(Some(exit)) = session.child.try_wait() {
             session.stop.store(true, Ordering::Relaxed);
+            if let Some(audio) = session.audio.take() {
+                audio.stop();
+            }
             let _ = fs::remove_dir_all(&session.dir);
             died = Some(format!("FFmpeg stopped unexpectedly ({exit}). {}", log_tail(&session.log)));
         }
@@ -428,6 +524,7 @@ pub fn status(recorder: &Recorder) -> RecorderStatus {
             recording: true,
             encoder: session.encoder.clone(),
             source: session.source.clone(),
+            audio: session.audio_label.clone(),
             buffered_seconds: segments(&session.dir).len() as u32,
             last_error: get_error(recorder),
             command: session.command_line.clone(),
@@ -443,6 +540,7 @@ pub fn status(recorder: &Recorder) -> RecorderStatus {
             recording: false,
             encoder: String::new(),
             source: String::new(),
+            audio: String::new(),
             buffered_seconds: 0,
             last_error: get_error(recorder),
             command: String::new(),
