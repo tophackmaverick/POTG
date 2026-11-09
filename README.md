@@ -4,13 +4,14 @@
 
 POTG is a gameplay clipping app that doesn't stop at saving the clip: it finishes it. Open a clip, press **Auto Cut**, and POTG analyzes the video and trims it around the moment that matters.
 
-> **Status: early development.** Built-in recording is new and still being tested on Windows. Clip editing and Auto Cut work on any video file.
+> **Status: early development.** Built-in recording, with game sound and microphone, is new and still being tested on Windows. Clip editing and Auto Cut work on any video file.
 
 Website: POTG.gg (coming soon)
 
 ## What works today
 
-- **Recording (in testing).** Start recording, and POTG keeps a rolling replay buffer of your screen. Press the clip hotkey to save the last seconds as an MP4. It picks a hardware encoder automatically. No audio yet.
+- **Recording (in testing).** Start recording, and POTG keeps a rolling replay buffer of your screen with sound. Press the clip hotkey to save the last seconds as an MP4. It picks a hardware encoder automatically.
+- **Audio (in testing).** Game and system sound, and optionally your microphone as a separate track, with an adjustable audio delay for sync.
 - **Clip library.** Pick a folder and browse your clips as a grid with thumbnails, duration, size, and date, plus search.
 - **Player and manual trim.** Preview a clip, set start and end points with sliders, and save a trimmed copy. The original is never overwritten.
 - **Auto Cut.** POTG scores the audio loudness and on-screen motion across the clip, finds the peak, and saves a trimmed copy around it with adjustable time before and after.
@@ -20,18 +21,19 @@ Website: POTG.gg (coming soon)
 
 ## Coming next
 
-- Game and desktop audio in recordings
-- Game and microphone audio capture
+- Audio from a single game instead of all system sound
 - Captions and 9:16 vertical export for TikTok and Shorts
-- A self-contained analysis engine, so Auto Cut needs no Python
+- Capture of a single game window
 
 ## How Auto Cut works
 
-1. Audio is extracted and its loudness is measured over short time slices.
-2. Frames are sampled and compared to measure how much changes on screen.
+1. FFmpeg extracts the audio, and its loudness is measured over short time slices.
+2. FFmpeg also supplies small grayscale frames, and the change between them measures on-screen motion.
 3. The two signals are combined into one highlight score over time.
 4. The highest peak is found, the window grows outward while the score stays high, and pre-roll and post-roll are added.
 5. FFmpeg writes the trimmed clip.
+
+All of this runs inside POTG, so nothing else needs to be installed.
 
 ## Tech stack
 
@@ -40,8 +42,8 @@ Website: POTG.gg (coming soon)
 | App shell | Tauri 2 |
 | Interface | Svelte, SvelteKit, TypeScript |
 | Backend | Rust |
-| Analysis | Python with NumPy and OpenCV |
-| Video processing | FFmpeg |
+| Audio capture | WASAPI through the cpal library |
+| Video processing and encoding | FFmpeg |
 
 ## Getting started
 
@@ -49,7 +51,6 @@ Website: POTG.gg (coming soon)
 
 - Node.js (LTS)
 - Rust, installed from rustup.rs
-- Python 3.11 or newer
 - FFmpeg on your PATH (the Windows installer already includes it)
 - Windows: Visual Studio C++ Build Tools. macOS: Xcode Command Line Tools (`xcode-select --install`)
 
@@ -59,23 +60,14 @@ Website: POTG.gg (coming soon)
 git clone https://github.com/YOUR-USERNAME/potg.git
 cd potg
 npm install
-pip install -r analysis/requirements.txt
 npm run tauri dev
 ```
 
-The first run compiles the Rust code and takes a few minutes. Choose a folder that contains video clips to get started.
+The first run compiles the Rust code and takes a few minutes. On macOS, recording uses a test pattern and no system sound, because real screen and system audio capture are Windows-only for now.
 
-### Try the analysis on its own
+### Environment override
 
-```
-python analysis/analyze.py path/to/clip.mp4
-```
-
-It prints one line of JSON with the peak time and the suggested start and end.
-
-### Environment overrides
-
-For development you can point POTG at specific tools with `POTG_FFMPEG`, `POTG_PYTHON`, and `POTG_ANALYSIS`.
+For development you can point POTG at a specific FFmpeg with `POTG_FFMPEG`.
 
 ## Default hotkeys
 
@@ -89,9 +81,8 @@ Both can be changed in Settings. On a Mac, function keys may need the fn key hel
 ## Project structure
 
 ```
-analysis/        Python analysis script and requirements
 src/             Svelte interface (library, editor, settings, overlay)
-src-tauri/       Rust backend (trim, Auto Cut, settings, hotkeys, overlay)
+src-tauri/       Rust backend (recording, audio, Auto Cut, settings, hotkeys, overlay)
 ```
 
 ## Roadmap
@@ -107,18 +98,18 @@ src-tauri/       Rust backend (trim, Auto Cut, settings, hotkeys, overlay)
 
 ## Known limitations
 
-- Recording captures the whole main screen, not a single game window, and has no audio yet.
+- Recording captures the whole main screen, not a single game window.
+- Sound capture records everything playing on your computer, including music and chat apps.
 - The overlay is a normal window, so it will not appear over games in exclusive fullscreen. Borderless windowed mode is the target.
-- The first installers are unsigned, so Windows SmartScreen shows a warning. Choose More info, then Run anyway.
-- The Windows installer includes FFmpeg, but Auto Cut still needs Python 3.11 or newer with NumPy and OpenCV installed.
-
-## Contributing
-
-Commit messages follow Conventional Commits, for example `feat(library): add manual trim` or `fix(capture): handle black frames`.
+- The installers are unsigned, so Windows SmartScreen shows a warning. Choose More info, then Run anyway.
 
 ## Third-party software
 
 The Windows installer includes an LGPL build of FFmpeg. See THIRD-PARTY-NOTICES.md for details.
+
+## Contributing
+
+Commit messages follow Conventional Commits, for example `feat(library): add manual trim` or `fix(capture): handle black frames`.
 
 ## License
 

@@ -15,4 +15,4 @@ You may replace `ffmpeg.exe` in the POTG installation folder with another compat
 
 ## Other components
 
-POTG is built with Tauri, Rust, Svelte, NumPy, and OpenCV. Each is used under its own open-source license.
+POTG is built with Tauri, Rust, Svelte, and the cpal audio library (Apache License 2.0). Each is used under its own open-source license.
